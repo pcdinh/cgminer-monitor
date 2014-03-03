@@ -3,7 +3,7 @@ cgminer-monitor
 
 Simple monitor script for cgminer in python. Console display, http server, email alerts. No additional modules required.
 
-Tested with python 2.7.2 and cgminer 3.2.0.
+Tested with python 2.7.6 and cgminer 3.7.2 in Windows 7 64 bit
 
 usage: cgminer-monitor.py [command] [parameter]
 
