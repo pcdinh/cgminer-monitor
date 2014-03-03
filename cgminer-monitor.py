@@ -15,12 +15,15 @@ import threading
 import SimpleHTTPServer
 import SocketServer
 import urllib2
+import subprocess
+from datetime import datetime
 
 
 #
 # Config
 #
-
+start_command = 'pool_max_1.bat'
+process_name = 'cgminer.exe'
 cgminer_host = 'localhost'
 cgminer_port = 4028
 email_smtp_server = 'smtp.gmail.com:587'
@@ -29,12 +32,12 @@ email_password = 'mypassword'
 email_from = 'myemail@example.com'
 email_to = 'myemail@example.com'
 email_subject = 'Miner warning detected'
-monitor_interval = 15
+monitor_interval = 5
 monitor_wait_after_email = 60
 monitor_http_interface = '0.0.0.0'
 monitor_http_port = 84
 monitor_restart_cgminer_if_sick = True
-monitor_send_email_alerts = True
+monitor_send_email_alerts = False
 monitor_max_temperature = 85
 monitor_min_mhs_scrypt = 0.5
 monitor_min_mhs_sha256 = 500
@@ -95,7 +98,7 @@ class CgminerClient:
             decoded = json.loads(received.replace('\x00', ''))
             return decoded
         except:
-            pass # restart makes it fail, but it's ok
+            pass  # restart makes it fail, but it's ok
 
     def _send(self, sock, msg):
         totalsent = 0
@@ -147,11 +150,51 @@ def StartMonitor(client):
         must_send_email = False
         must_restart = False
 
-        result = client.command('coin', None)
+        try:
+            result = client.command('coin', None)
+        except:
+            pass
+        if not result:
+            # Filter a list of windows process that has stopped responding
+            # Windows only (Linux not supported now)
+            r = os.popen('tasklist /FI "STATUS eq Not Responding"').read().strip().split('\n')
+            for p in r:
+                if p.startswith(process_name):
+                    # It's a quick script so just go get the
+                    # first # valid info which is the PID
+                    d = p.split(' ')
+                    d.pop(0)
+                    i = d.pop(0)
+                    while not i:
+                        i = d.pop(0)
+                    # Kill by PID
+                    k = os.popen('taskkill /F /T /PID %s' % i).read()
+                    print k
+
+            # Now we check if cgminer.exe is running then run it if its not loaded
+            r = os.popen('WMIC PROCESS get Caption,Commandline,Processid"').read().strip().split('\n')
+            found_pid = False
+            for p in r:
+                if p.startswith(process_name):
+                    found_pid = p[-6:]
+            if not found_pid:
+                print datetime.now(), " Unable to find cgminer.exe process"
+                current_dir = os.path.dirname(os.path.realpath(__file__))
+                with open(os.devnull, 'wb') as devnull:
+                    command = os.path.join(current_dir, start_command)
+                    print command
+                    # subprocess.call([command, ])
+                    subprocess.Popen('cmd.exe /k start %s' % command, stdout=devnull, stderr=subprocess.STDOUT, bufsize=0, creationflags=subprocess.CREATE_NEW_CONSOLE)
+                    time.sleep(20)
+            else:
+                # Not responsive
+                found_pid = found_pid.strip()
+                k = os.popen('taskkill /F /T /PID %s' % i).read()
+                print k
+            continue
         coin = ''
-        if result:
-            coin = result['COIN'][0]['Hash Method']
-            output = 'Coin     : %s\n' % coin
+        coin = result['COIN'][0]['Hash Method']
+        output = 'Coin     : %s\n' % coin
 
         result = client.command('pools', None)
         if result:
@@ -170,9 +213,9 @@ def StartMonitor(client):
             output += 'GPU 0    : %s%s\n' % (gpu_result['Status'], warning)
 
             min_mhs = monitor_min_mhs_scrypt if coin == 'scrypt' else monitor_min_mhs_sha256
-            warning = ' <----- /!\\' if gpu_result['MHS 1s'] < min_mhs else ''
+            warning = ' <----- /!\\' if gpu_result['MHS 5s'] < min_mhs else ''
             must_send_email = True if warning != '' else must_send_email
-            output += 'MHS 1s/av: %s/%s%s\n' % (gpu_result['MHS 1s'], gpu_result['MHS av'], warning)
+            output += 'MHS 1s/av: %s/%s%s\n' % (gpu_result['MHS 5s'], gpu_result['MHS av'], warning)
 
             warning = ' <----- /!\\' if gpu_result['Temperature'] > monitor_max_temperature else ''
             must_send_email = True if warning != '' else must_send_email
@@ -233,7 +276,7 @@ class CGMinerRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
         global shared_output
         global shared_output_lock
         shared_output_lock.acquire()
-        html_output = shared_output[:-1] # one too many \n
+        html_output = shared_output[:-1]  # one too many \n
         shared_output_lock.release()
 
         # Get balance from pools
